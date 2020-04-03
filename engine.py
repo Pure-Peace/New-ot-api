@@ -30,14 +30,20 @@ costFormulaSubmit = api.namespace('costFormulaSubmit', description='提交cost�
 costFormulaGet = api.namespace('costFormulaGet', description='查看cost计算公式，对登录和未登录两种情况返回不同值', path='/')
 costCalculator = api.namespace('costCalculator', description='计算玩家在指定算法下的cost数据，同时返回pp+数据', path='/')
 
-getPlusPPData = api.namespace('getPlusPPData', description='获取玩家pp+数据。可指定手动进行刷新操作', path='/')
-getPlayerDataV1 = api.namespace('getPlayerDataV1', description='获取玩家osu!信息。自动进行刷新操作', path='/')
+getPlusPPData = api.namespace('getPlusPPData', description='获取玩家pp+数据。可指定手动进行刷新操作（osu!api）', path='/')
+getPlayerDataV1 = api.namespace('getPlayerDataV1', description='获取玩家osu!信息。自动进行刷新操作（osu!api）', path='/')
+
+getPlayerOsuid = api.namespace('getPlayerOsuid', description='获取osuid（不稳定，非osu!api）', path='/')
+
 
 
 # pasers
 parser_token = api.parser().add_argument('X-OtsuToken', location='headers', type=str)
 parser_osuid = api.parser().add_argument('osuid', location='headers', type=str)
-
+parser_username = api.parser().add_argument('username', type=str, required=True, help='玩家用户名')
+parser_playerKey = api.parser().add_argument('playerKey', required=True, help='玩家名或者玩家id')
+parser_action = api.parser().add_argument('action', required=False, help='一个可选的操作参数，如noHistory：不返回历史数据；simple：简单数据')
+parser_keyType = api.parser().add_argument('keyType', required=False, help='一个可选的参数，指定playKey是为osuid（填id）还是username（填string）')
 
 # model
 osuUserAuthCode = api.model('osuUserAuthCode', {
@@ -63,12 +69,14 @@ playerCostInfo = api.model('playerCostInfo', {
 })
 playerKey = api.model('playerKey', {
     'playerKey': fields.String(required=True, description='玩家osuid 或 玩家osuname', example='5084172 或 PurePeace'),
-    'action': fields.String(description='一个可选的操作参数', example='无'),
+    'action': fields.String(description='一个可选的操作参数，如noHistory：不返回历史数据；simple：简单数据', example='noHistory'),
+    'keyType': fields.String(description='一个可选的参数，指定playKey是为osuid（填id）还是username（填string）', example='')
 })
 userGroupSetting = api.model('userGroupSetting', {
     'targetUsers': fields.String(required=True, description='otsu!用户id 或 装着otsu!用户id的列表（批量）', example=''),
     'targetGroup': fields.Integer(required=True, description='目标用户组id', example=''),
 })
+
 
 # interceptorDo
 @app.before_request
@@ -169,7 +177,11 @@ class costFormulaGet(Resource):
         if status == -1:
             return core.getPublicFormulas()
         else:
-            return core.getFormulasLogined(authorization=authorize)
+            res = core.getFormulasLogined(authorization=authorize)
+            if res.get('status') == -1:
+                return core.getPublicFormulas()
+            else:
+                return res
 
 
 # api resource(s): cost calculate
@@ -190,10 +202,17 @@ class getPlusPPData(Resource):
     @getPlusPPData.doc(body=playerKey)
     @utils.docsParameter(docs.getPlusPPData)
     def post(self):
-        data, status, reqInfo = core.dataGetter(request, ['playerKey', 'action'], strict=False)
+        data, status, reqInfo = core.dataGetter(request, ['playerKey', 'action', 'keyType'], strict=False)
 
         if status == -1: return utils.utInfo(data, status=-1)
         return core.handleGetPlayerPlusPP(data)
+    @getPlayerOsuid.expect(parser_playerKey, parser_action, parser_keyType)
+    def get(self):
+        return core.handleGetPlayerPlusPP({
+            'playerKey': request.args.get('playerKey'), 
+            'action': request.args.get('action'), 
+            'keyType': request.args.get('keyType')
+        })
 
 
 # api resource(s): set user group
@@ -218,13 +237,35 @@ class getPlayerDataV1(Resource):
     @getPlayerDataV1.doc(body=playerKey)
     @utils.docsParameter(docs.getPlayerDataV1)
     def post(self):
-        data, status, reqInfo = core.dataGetter(request, ['playerKey'])
+        data, status, reqInfo = core.dataGetter(request, ['playerKey', 'action', 'keyType'], strict=False)
 
         if status == -1: return utils.utInfo(data, status=-1)
         return core.handleGetPlayerDataV1(data)
+    @getPlayerOsuid.expect(parser_playerKey, parser_action, parser_keyType)
+    def get(self):
+        return core.handleGetPlayerDataV1({
+            'playerKey': request.args.get('playerKey'), 
+            'action': request.args.get('action'), 
+            'keyType': request.args.get('keyType')
+        })
+        
+
+
+# api resource(s): get player osuid
+@getPlayerOsuid.route('/getPlayerOsuid')
+@getPlayerOsuid.expect(parser_username)
+class getPlayerOsuid(Resource):
+    #@utils.docsParameter(docs.getPlayerDataV1)
+    def get(self):
+        username = request.args.get('username')
+        #data, status, reqInfo = core.dataGetter(request, ['username'], strict=True)
+        if not username: return None
+        #if status == -1: return utils.utInfo(data, status=-1)
+        return core.handleGetPlayerOsuid(username)
+
 
 
 # run? yes!
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=9529)
+    app.run(host='0.0.0.0', port=9531)
 

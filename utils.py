@@ -43,11 +43,14 @@ def requestPlusPP(userKey):
 
 
 # get player info from osu! api v1
-def requestPlayerInfo(userKey):
+def requestPlayerInfo(userKey, keyType=None):
     print(f'[{getTime(1)}]：正在请求osu!玩家数据：{userKey} ...')
     start = time.time()
     try:
-        resp = requests.get(f'https://osu.ppy.sh/api/get_user?k={osuApiv1Key}&u={userKey}', timeout=12, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.81 Safari/537.36 SE 2.X MetaSr 1.0'})
+        link = f'https://osu.ppy.sh/api/get_user?k={osuApiv1Key}&u={userKey}'
+        if keyType not in (None, '') and keyType in ('string', 'id'):
+            link += f'&type={keyType}'
+        resp = requests.get(link, timeout=12, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.81 Safari/537.36 SE 2.X MetaSr 1.0'})
         onece = eval(resp.text)
         print(f'[{getTime(1)}]：请求成功，耗时：{time.time()-start}s')
         if type(onece) != list:

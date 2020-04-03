@@ -12,6 +12,7 @@ otsu.fun - Website Api Core
 import utils
 import requests
 import database
+import re
 
 
 # request token by code
@@ -59,6 +60,16 @@ def handleLoginByOsuAuth(osuOauthData, info='用osu!官方授权链接登录otsu
     return data, message, info, status
 
 
+def handleGetPlayerOsuid(username, osuid=None):
+    try:
+        resp = requests.head(f'https://osu.ppy.sh/users/{username}')
+        if resp.status_code == 302:
+            osuid = int(re.sub(r'\D', '', resp.next.url))
+    except:
+        print('xxd')
+    return osuid
+
+
 # verify user authorization information
 def authorizeGuard(needGroup=[]):
     '''
@@ -104,6 +115,9 @@ def authorizer(osuid, otsuToken, path, needGroup=[], customInfo={}):
         # pass and refresh token
         database.setUserOtsuToken(osuid, otsuToken, actionTime, expiresIn, user=None)
         privilege['osuid'] = osuid
+        userObject = database.getUserByosuid(osuid)
+        if userObject != None: privilege['osuname'] = userObject.osuname
+        else: privilege['osuname'] = '未知'
         return infoer('success'), 1, privilege
 
 
@@ -154,10 +168,12 @@ def handleSetUserGroup(data, info='修改用户所属权限组', message='', sta
 @utils.utReturner
 def handleGetPlayerDataV1(data, info='获取osu!玩家信息', message='', status=-1):
     playerKey = data.get('playerKey')
+    action = data.get('action')
+    kt = data.get('keyType')
     data = {}
     if playerKey not in (None,''):
         if database.getRedisData(f'{playerKey.lower()}apiV1Record', 'recordTimer') == None:
-            res = getPlayerInfoWithApiv1(playerKey)
+            res = getPlayerInfoWithApiv1(playerKey, keyType=kt)
             if res.get('status') != -1:
                 database.setDataToRedis(f'{playerKey.lower()}apiV1Record', f'冷却中：{utils.getTime(1)}', 'recordTimer', expireS=dataRecordTimer)
         
@@ -166,7 +182,7 @@ def handleGetPlayerDataV1(data, info='获取osu!玩家信息', message='', statu
             if type(res) == list:
                 if len(res) > 1:
                     repairDuplicateDataRecord(res)
-                    osuInfo = getPlayerInfoWithApiv1(playerKey)
+                    osuInfo = getPlayerInfoWithApiv1(playerKey, keyType=kt)
                     if osuInfo.get('status') != -1:
                         osuid = osuInfo.get('message').get('user_id')
                         data, status = [i.getDict for i in res if i.osuid == osuid][0], 1
@@ -177,6 +193,18 @@ def handleGetPlayerDataV1(data, info='获取osu!玩家信息', message='', statu
             else:
                 data, status = res.getDict, 1
 
+    if status == 1:
+        if action == 'simple':
+            data = {
+                'osuid': data.get('osuid'), 
+                'osuname': data.get('osuname'), 
+                'pp': data.get('current', {}).get('pp_raw'), 
+                'rank': data.get('current', {}).get('pp_rank'),
+                'country': data.get('current', {}).get('country')
+            }
+        if action == 'noHistory':
+            data['history'] = []
+
     return data, message, info, status
 
 
@@ -184,6 +212,7 @@ def handleGetPlayerDataV1(data, info='获取osu!玩家信息', message='', statu
 # get player pp+ data
 def handleGetPlayerPlusPP(data, info='获取玩家pp+记录', message='', status=-1):
     playerKey, action = data.get('playerKey'), data.get('action')
+    kt = data.get('keyType')
     data = {}
     if playerKey not in (None,''):
         if action == 'refresh':
@@ -201,7 +230,7 @@ def handleGetPlayerPlusPP(data, info='获取玩家pp+记录', message='', status
             if type(res) == list:
                 if len(res) > 1:
                     repairDuplicateDataRecord(res)
-                    osuInfo = getPlayerInfoWithApiv1(playerKey)
+                    osuInfo = getPlayerInfoWithApiv1(playerKey, keyType=kt)
                     if osuInfo.get('status') != -1:
                         osuid = osuInfo.get('message').get('user_id')
                         data, status = [i.getDict for i in res if i.osuid == osuid][0], 1
@@ -262,6 +291,7 @@ def handleSubmitCostFormula(data, info='提交cost公式', message='', status=0,
 @authorizeGuard(needGroup=['otsu!user'])
 def handleLoginChecker(reqInfo, info='登录验证', message='', status=0, privilege={}):
     return {'osuid': privilege.get('osuid'),
+            'osuname': privilege.get('osuname'),
             'cantUse': privilege.get('cantUse'),
             'tokenTime': utils.getTime(),
             'userGroup': privilege.get('userGroup'),
@@ -274,18 +304,20 @@ def handleLoginChecker(reqInfo, info='登录验证', message='', status=0, privi
 def getFormulasLogined(info='获取公式列表（已登录）', message='', status=0, privilege={}):
     userLevel = privilege.get('userLevel')
     if userLevel != None and userLevel >= 80:
-        data = [i.getDict for i in database.getAllDataFromTable('CostFormulas')]
+        my = [i.getDict for i in database.getAllDataFromTable('CostFormulas') if i.creator_id == privilege.get('osuid')]
+        public = [i.getDict for i in database.getAllDataFromTable('CostFormulas')]
+        data = {'public': public, 'my': my}
     else:
-        a = [i.getDict for i in database.getAllDataFromTable('CostFormulas') if i.creator_id == privilege.get('osuid')]
-        b = [i.getDict for i in database.getValidFormulas() if i.public == 1]
-        data = list(set(a + b))
+        my = [i.getDict for i in database.getAllDataFromTable('CostFormulas') if i.creator_id == privilege.get('osuid')]
+        public = [i.getDict for i in database.getValidFormulas() if i.public == 1]
+        data = {'public': public, 'my': my}
     return data, message, info, 1
 
 
 # get *PUBLIC* formulas
 @utils.utReturner
 def getPublicFormulas(info='获取公式列表（未登录）', message='', status=0):
-    data = [i.getDict for i in database.getValidFormulas() if i.public == 1]
+    data = {'public': [i.getDict for i in database.getValidFormulas() if i.public == 1], 'my': []}
     return data, message, info, 1
 
 
@@ -313,8 +345,8 @@ def handleSetAccount(data, info='设置otsu!登录用户名和密码', message='
 
 
 # get osu! player info with api v1
-def getPlayerInfoWithApiv1(userKey, saveInfo=True):
-    osuRes = utils.requestPlayerInfo(userKey)
+def getPlayerInfoWithApiv1(userKey, saveInfo=True, keyType=None):
+    osuRes = utils.requestPlayerInfo(userKey, keyType)
     status = osuRes.get('status')
     message = osuRes.get('message')
     if status != -1 and saveInfo == True:
@@ -326,6 +358,8 @@ def getPlayerInfoWithApiv1(userKey, saveInfo=True):
 def getRawPPFromDB(userKey):
     plusRecord, target = database.getPlayerPlusPPRecord(userKey), -1
     rawPP = {}
+    osuid = None
+    osuname = None
     if plusRecord != None:
         if type(plusRecord) == list:
             if len(plusRecord) > 1:
@@ -340,9 +374,11 @@ def getRawPPFromDB(userKey):
         timer = utils.getTime() - utils.toTimeStamp(str(target.update_time))
         if timer < 1600:
             rawPP, status = eval(target.current_raw), 1
+            osuid = target.osuid
+            osuname = target.osuname
         else: status = -1
     else: status = -1
-    return {'rawPP': rawPP, 'status': status}
+    return {'rawPP': rawPP, 'status': status, 'osuid': osuid, 'osuname': osuname}
 
 
 # repair duplicate name in pp+ data record or api v1 data record
@@ -367,23 +403,27 @@ def costCalculatePartner(forluma, userKey, rawPP, info, message):
             if res.get('status') == -1:
                 return None, res.get('message'), info, -1
             else:
-                return {'cost': res.get('message'), 'remark': '通过您手动提供的玩家PP+信息计算，仅供参考', 'plusPP': rawPP}, message, info, 1
+                return {'cost': res.get('message'), 'remark': '通过您手动提供的玩家PP+信息计算，仅供参考', 'plusPP': rawPP, 'osuid': None, 'osuname': None}, message, info, 1
         elif userKey not in (None, ''):
             res = getRawPPFromDB(userKey)
             if res.get('status') == 1:
                 # calculate!!
                 rawPP = res.get('rawPP')
+                osuid = res.get('osuid')
+                osuname = res.get('osuname')
                 res = utils.costCalculator(rawPP, forluma)
-                return {'cost': res.get('message'), 'remark': '30分钟内不会对同一玩家的信息进行刷新，故计算结果暂时不变', 'plusPP': rawPP}, message, info, res.get('status')
+                return {'cost': res.get('message'), 'remark': '30分钟内不会对同一玩家的信息进行刷新，故计算结果暂时不变', 'plusPP': rawPP, 'osuid': osuid, 'osuname': osuname}, message, info, res.get('status')
             else:
                 plusRes = utils.requestPlusPP(userKey)
                 plusInfo = plusRes.get('message')
                 if plusRes.get('status') == 1:
                     # calculate!!
                     rawPP = plusInfo.get('rawPP')
+                    osuid = plusInfo.get('osuid')
+                    osuname = plusInfo.get('osuname')
                     res = utils.costCalculator(rawPP, forluma)
                     database.savePlayerPlusPPInfo(plusInfo)
-                    return {'cost': res.get('message'), 'remark': '通过即时获取的玩家信息进行计算', 'plusPP': rawPP}, message, info, res.get('status')
+                    return {'cost': res.get('message'), 'remark': '通过即时获取的玩家信息进行计算', 'plusPP': rawPP, 'osuid': osuid, 'osuname': osuname}, message, info, res.get('status')
                 else:
                     return None, plusInfo, info, -1
         else:
@@ -569,14 +609,14 @@ def deleteFromBlacklist(blackitem):
 
 
 # client config
-client_id = '****'
-client_secret = '****'
-redirect_uri = '****'
+client_id = '545'
+client_secret = '6d3Gyr4oNrsotYgA8mWCRoLWa2o63kWpmT58Vo1z'
+redirect_uri = 'http://otsu.fun/oauth'
 
 # for dev
-# client_id = '****'
-# client_secret ='****'
-# redirect_uri = '****'
+# client_id = '546'
+# client_secret ='G5vg6u40hrBIIMjCsbWl4J1KKQ4egW6Wwxigf94v'
+# redirect_uri = 'http://localhost/oauth'
 
 # token expires in(7 days now)
 expiresIn = 3600 * 24 * 7
