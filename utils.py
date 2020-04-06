@@ -35,6 +35,8 @@ def requestPlusPP(userKey):
         r = pp.find('tbody').find_all('td')
         s = [i.text.replace(':', '').replace(',','').replace('pp','').replace('(','').replace(')','').replace('Aim','').replace(' ','') for i in r]
         rawPP = {s[i]: int(s[i+1]) for i in range(0,len(s),2)}
+        rawPP['Aim'] = rawPP['Total']
+        del(rawPP['Total'])
         status, message = 1, {'totalPP': totalPP, 'rawPP': rawPP, 'osuid': osuid, 'osuname': osuname}
     except Exception as Err:
         print(f'[{getTime(1)}]：请求失败：', Err)
@@ -51,17 +53,19 @@ def requestPlayerInfo(userKey, keyType=None):
         if keyType not in (None, '') and keyType in ('string', 'id'):
             link += f'&type={keyType}'
         resp = requests.get(link, timeout=12, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.81 Safari/537.36 SE 2.X MetaSr 1.0'})
-        onece = eval(resp.text)
+        data = resp.json()
         print(f'[{getTime(1)}]：请求成功，耗时：{time.time()-start}s')
-        if type(onece) != list:
+        if type(data) != list:
             status, message = -1, 'osu!官网数据获取失败（老板服务器挂了）'
         else:
-            if len(onece) == 0:
+            if len(data) == 0:
                 status, message = -1, 'osu!官网数据获取错误（可能出了别的问题）'
-            elif onece[0].get('user_id') not in (None,''):
-                status, message = 1, onece[0]
+            elif data[0].get('user_id') not in (None,''):
+                data[0]['events'] = []
+                del(data[0]['events'])
+                status, message = 1, data[0]
     except Exception as Err:
-        print(f'[{getTime(1)}]：请求失败：', Err)
+        print(f'[{getTime(1)}]：出现错误：', Err)
         status, message = -1, 'osu!官网数据获取失败（老板服务器挂了）'
     return {'message': message, 'status': status}
 
@@ -207,7 +211,7 @@ def funcEventer(info={True:'success to execute.', False:'failed to execute.'}):
 def costCalculator(rawPP, formula, osuid=''):
     keyword, message = 0, '您提交的公式无法通过自动化系统测试哦，不行不行'
     items = {
-        'Total': 3600,
+        'Aim': 3600,
         'Jump': 3000,
         'Flow': 1000,
         'Precision': 900,
